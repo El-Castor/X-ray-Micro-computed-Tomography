@@ -8,6 +8,7 @@ To install all dependancy you should install miniconda3, see below the documenta
 
 * Myriam Oger (myriam.oger@def.gouv.fr)
 * Abdelhafid Bendahmane (Abdelhafid.Bendahmane@universite-paris-saclay.fr)
+* Filip Slavkovic (Filip.slavkovic@universite-paris-saclay.fr)
 
 ## Maintainers
 
