@@ -2,9 +2,9 @@
 """
 Created on Thu Sep  3 14:04:50 2020
 
-Date de dernière modification : 14/06/2022
+Date of last modification : 14/06/2022
 
-@author: Unité Imagerie - Myriam Oger
+@author: IRBA - Unité Imagerie - Myriam Oger
 
 
 Segmentation_nectary
@@ -13,19 +13,17 @@ Usage:
     Segmentation_nectary.py
     Segmentation_nectary.py (-h | --help)
     Segmentation_nectary.py <name_directory> [--seuil=<seuil>]
-    Segmentation_nectary.py [--path=<path>] [--type=<type>] [--hide | --show]\
-    [--quiet | --verbose] [--seuil=<seuil>]
+    Segmentation_nectary.py [--path=<path>] [--type=<type>] [--show] \
+    [--verbose] [--seuil=<seuil>]
 
 Options:  
     -h, --help          show this
     -s, --seuil SEUIL   threshold parameter for nectary detection [default: 13_995]
-    --hide              hide the intermediate images (default)
     --show              visualization of intermediate images
-    --path PATH         path of the directory containing images to analyse [default: ./datasets/]
+    --path PATH         path of the directory containing images to analyse
     --type TYPE         dictionary of "types" of flowers to process, as writen
                         in the names of images. ex: {'Ma':'Male', 'Fe':'Female',...}
-    --quiet             print less text (default)
-    --verbose           print more text
+    --verbose           print text
 """
 
 
@@ -41,10 +39,10 @@ from datetime import date
 from docopt import docopt
 from scipy import interpolate
 from scipy.ndimage import binary_erosion, binary_dilation, binary_fill_holes
-from scipy.ndimage import distance_transform_edt, generate_binary_structure, median_filter
+from scipy.ndimage import generate_binary_structure, median_filter, uniform_filter
 from skimage import measure
 from skimage.feature import peak_local_max
-from skimage.filters import threshold_otsu
+#from skimage.filters import threshold_otsu
 from skimage.segmentation import watershed
 from tkinter.filedialog import askdirectory
 from tqdm import tqdm
@@ -106,8 +104,8 @@ class All_Flowers():
         self.dico = Dico_images(f"{path_codes.replace(temp,'data_infos')}{os.sep}{file}")
         
     def create_list_flowers(self):
-        """ Creation of the list of "flower" directory to analyse, i.e. all the
-        directory in the path """
+        """ Creation of the lists of "flower" directories to analyse, i.e. all the
+        directories in the path. A list is done for each type of flower. """
         self.list_flowers = []
         for self.curr_type in TYPE:
             motif = f"{os.sep}*{self.curr_type}*"
@@ -118,9 +116,12 @@ class All_Flowers():
                     break
                 temp = glob.glob(f"{self.path2analyze+motif*ind}")
                 ind-=1
-            if os.path.isfile(temp[0]):
-                temp = glob.glob(f"{self.path2analyze+motif*ind}")
-            self.list_flowers.append(temp)
+            try:
+                if os.path.isfile(temp[0]):
+                    temp = glob.glob(f"{self.path2analyze+motif*ind}")
+                self.list_flowers.append(temp)
+            except:
+                self.list_flowers.append([])
         
     def run_processing(self):
         """ Starts the processing of all the flowers on each list of type """
@@ -131,21 +132,23 @@ class All_Flowers():
                 continue
             pbar = tqdm(total = int(len(self.list_flowers[i])),
                         desc = f'Image processing on {DICOTYPE[self.curr_type]} flowers')
+            ind = 0
             for self.curr_path_flower in self.list_flowers[i]:
+                ind += 1
                 if os.path.isfile(self.curr_path_flower): continue
-                """ process each flower of the list for the current type """
+                #~~ process each flower of the list for the current type ~~
                 self.curr_flower = Single_Flower(self.curr_type, self.showimg,
                                                  self.curr_path_flower, self.dirpp, self.verb)
                 self.curr_flower.info_flower = self.dico[self.curr_flower.flower_name]
                 if self.verb:
                     t_begProg = time.time()
                     t = time.localtime(t_begProg)
-                    print(f'Current flower : {self.curr_flower.flower_name}')
+                    print(f'\nCurrent flower : {self.curr_flower.flower_name}')
                     print(f"Progam started at : {t.tm_hour}:{t.tm_min}:{t.tm_sec}"+
                           f" on {t.tm_mon}/{t.tm_mday}/{t.tm_year}")
                 self.curr_flower.flower_processing_by_type()
                 if self.verb:
-                    print(f"End of process for the flower of the directory {self.curr_path_flower}\n")
+                    print(f"\nEnd of process for the flower of the directory {self.curr_path_flower}\n")
                     t_finProg = time.time()
                     print("program duration : "+str(t_finProg-t_begProg))
                     t2 = time.localtime(t_finProg)
@@ -185,10 +188,10 @@ class Single_Flower():
         self.blur = self.curr_flower.blur
 
     def display_image(self, image, label=False, namesave=False):
-        if not self.showimg:
-            return
         """ Image display with or without the label of each region. 
         The image is saved if 'namesave' is given."""
+        if not self.showimg:
+            return
         pp.imshow(image)
         if label:
             prop = measure.regionprops(image)
@@ -208,6 +211,7 @@ class Single_Flower():
         self.flower_num     = self.flower_name[len(self.curr_type):]
     
     def list_images(self):
+        """ create a list containing all the images of the current directory """
         self.list_files = glob.glob(self.curr_path+'*Tra0000[0-9][0-9][0-9][0-9].tif')
         self.dir_res = f'{self.curr_path}segmentation_nectary{os.sep}{dir_day}{os.sep}'
         if not os.path.exists(self.dir_res):
@@ -247,12 +251,59 @@ class Single_Flower():
         image_b = image[:, :]
         image_b[indices] = med[indices]
         return image_b[:, :]
+
+    def remove_outliers_contours(self, image_ini, nb_label2):
+        """ Remove outliers on contours to ease the interpolation. """
+        image_cont = np.zeros(image_ini.shape)
+        if nb_label2 > self.curr_flower.max_lab:
+            temphist = np.histogram(image_cont, bins=nb_label2, range=(1, nb_label2+1))
+            temp = temphist[0].copy()
+            temp.sort()
+            lab_to_keep = [int(i) for i,j in zip(temphist[1],temphist[0]) if j in temp[-2::]]
+        else:
+            lab_to_keep = [i for i in range(1, self.curr_flower.max_lab+1)]
+        for lab in lab_to_keep:
+            ind_interval = np.where(image_ini == lab)
+            meanInt = np.mean(self.height[ind_interval])
+            stdInt = np.std(self.height[ind_interval])
+            ind_suppr = np.where(self.height > meanInt+(3*stdInt)) #TODO: voir si 2 ou 3...
+            temp = np.where(image_ini==lab, self.height, 0)
+            temp[ind_suppr] = 0
+            image_cont = np.maximum(temp, image_cont)
+        return image_cont
     
+    def nectary_contours(self, nectary):
+        """ Search the contours of the detected nectary and use them to compute,
+        by interpolation, nectary lower boundaries. """
+        # External and internal (for female flowers only) boundaries
+        nectary_cont = np.logical_xor(nectary, binary_erosion(nectary, structure=STRUCT8))
+        self.curr_flower.ind_nectary = np.where(nectary > 0)
+        label_nect_cont, numlab = measure.label(nectary_cont, return_num=True)
+        self.display_image(label_nect_cont, namesave=f'{self.flower_name}_nectary_contours_lab')
+        
+        #~~ Remove the outliers of the boundaries ~~
+        self.curr_flower.nectary_cont = self.remove_outliers_contours(label_nect_cont, numlab)
+        self.display_image(self.curr_flower.nectary_cont, namesave=f'{self.flower_name}_nectary_contours')
+        
+        #~~ Interpolation between the contours to compute the lower boundaries ~~
+        grid_xn, grid_yn = np.indices((self.curr_flower.nectary_cont.shape[0],
+                                       self.curr_flower.nectary_cont.shape[1]))
+        points2 = np.where(self.curr_flower.nectary_cont > 10)
+        values2 = self.curr_flower.nectary_cont[points2]
+        points2 = np.array([[points2[0][f], points2[1][f]] for f in range(len(points2[0]))])
+        self.curr_flower.interp2 = interpolate.griddata(points2, values2, \
+                                                        (grid_xn, grid_yn), \
+                                                        fill_value=0, \
+                                                        method='linear')
+        self.display_image(np.where(nectary>0,self.curr_flower.interp2,0), \
+                           namesave=f'{self.flower_name}_interpolation')
+        del(nectary, grid_xn, grid_yn, points2, values2)
+        PIL.Image.fromarray(self.curr_flower.interp2).save(self.dir_res + "interpolation.tif")
+
     def flower_processing_by_type(self):
         """ Process the flower with a different method for male and for female
         and hermaphrodite flowers """
 
-            
         if self.verb:
             print(f"Segmentation of {DICOTYPE[self.curr_type]} nectaries.\n\
                   Choosing features are:\n\
@@ -262,39 +313,45 @@ class Single_Flower():
                   - open3D: {open3D};\n\
                   - holefill in 3D: {fillholes}.")
         
-        #~~ Common part of the process ~~
+        ###~~ Common part of the process ~~
         self.firstfile = int(self.info_flower['z min'])
         self.lastfile  = int(self.info_flower['z max'])
         self.curr_flower.first_file = self.firstfile
         self.curr_flower.last_file = self.lastfile
-        #
-        # "Height" image
+        
+        #~~ "Height" image ~~
         if self.verb: print('image of height')
         self.image_height()
-        #
-        # Clean black outliers
+        
+        #~~ Clean black outliers ~~
         self.height = self.remove_outliers(self.height, 5, 50, which='dark')
         
-        # Display images
+        #~~ Display images ~~
         PIL.Image.fromarray(self.height).save(self.dir_res + "height.tif")
-        self.display_image(self.height, namesave=f'{self.curr_flower}_height')
-        self.display_image(self.height_blur, namesave=f'{self.curr_flower}_height_blur{self.blur}')
-        #
-        #~~ End of common part ~~
+        self.display_image(self.height, namesave=f'{self.flower_name}_height')
+        self.display_image(self.height_blur, namesave=f'{self.flower_name}_height_blur{self.blur}')
 
-       # Mask of the flower
-        #TODO : voir les différences entre les 2 lignes (1ère F, 2ème M)
-        mask = np.where(self.height > 0, 1, 0)
-        self.display_image(mask, namesave=f'{self.curr_flower}_mask1')
+        #~~ Mask of the flower ~~
         mask = np.where(self.height > np.min(self.height), 1, 0)
-        self.display_image(mask, namesave=f'{self.curr_flower}_mask2')
-        self.display_image(mask, namesave=f'{self.curr_flower}_mask_flower')
+        self.display_image(mask, namesave=f'{self.flower_name}_mask_flower')
+        
+        ###~~ End of common part ~~
         
         if self.verb: print('Nectary segmentation')
         self.curr_flower.label_segmentation(self.height, self.height_blur, mask)
-        self.display_image(self.curr_flower.lbl, label=True, namesave=f'{self.curr_flower}_segmentation')
+        self.display_image(self.curr_flower.lbl, label=True, namesave=f'{self.flower_name}_segmentation')
         
-        self.curr_flower.process()
+        #~~ Nectary detection ~~
+        nectary, to_display  = self.curr_flower.nectary_detection()
+        if len(to_display):
+            for img in to_display:
+                self.display_image(img[0], label=img[1],namesave=img[2])
+        
+        #~~ Nectary boundaries computation ~~
+        self.nectary_contours(nectary)
+        
+        #~~ 3D image of the nectary ~~
+        self.curr_flower.create_3Dimage()
 
 
 
@@ -307,6 +364,7 @@ class Female_Flower():
         self.blur       = 50
         self.showimg    = showimg
         self.verb       = verbose
+        self.max_lab    = 2 # 2 contours on 2D Z-projection: 1 external, 1 internal
 
     def morphological_segmentation(self, img_height, mask_height, min_dist=120):
         """ Segmentation using watershed """
@@ -316,105 +374,62 @@ class Female_Flower():
         return ws
     
     def label_segmentation(self, img_height, img_height_blur, mask):
+        self.height = img_height
+        self.height_blur = img_height_blur
         self.lbl_blur = self.morphological_segmentation(img_height_blur, mask, 80)
-        self.lbl = self.morphological_segmentation(img_height, mask, 80)
+        self.lbl = self.morphological_segmentation(self.height, mask, 80)
     
     def nectary_detection(self):
+        """ For female flowers, nectary is a crown arround the style.
+        => First step = find the style (flower center)
+        => Second step = dilate the style and reconstruct all the surrounding regions
+        => Thrid step = remove the style """
+        to_display = []
+        
         # Flower center on blured 'height' image
         labelc_blur = self.lbl_blur[int(self.lbl_blur.shape[0]/2), int(self.lbl_blur.shape[1]/2)]
         center_blur = np.where(self.lbl_blur == labelc_blur, 1, 0)
         center_blur = binary_fill_holes(center_blur)
+        
         # Flower center on initial 'height' image
         labelc = self.lbl[int(self.lbl.shape[0]/2), int(self.lbl.shape[1]/2)]
         center = np.where(self.lbl == labelc, 1, 0)
         center = binary_fill_holes(center)
-        #display_image(center_blur, namesave=f'{self.curr_flower}_center_flower')
-        print("Nectary")
-        #
+        to_display.append([center_blur, False, f'{self.flower_ID}_flower_center'])
+        
         # Detection of nectary area in 'height' image by dilation of the center
         nectary = binary_dilation(center_blur, structure=STRUCT8, iterations=50)
-        labeln = {}
-        clelabeln = labeln.keys()
-        indicesnect = np.where(np.logical_xor(nectary,center_blur) == 1)
-        for i in range(len(indicesnect[0])):
-            if self.lbl_blur[indicesnect[0][i], indicesnect[1][i]] not in clelabeln:
-                labeln[self.lbl_blur[indicesnect[0][i], indicesnect[1][i]]] = 1
-        #
+        labeln = np.histogram(self.lbl_blur[np.where(np.logical_xor(nectary,center_blur) == 1)], 
+                              bins=self.lbl_blur.max(),
+                              range=[1, self.lbl_blur.max()+1])
+        labeln = [i for i,j in zip(labeln[1],labeln[0]) if (j>0)]
+        
         nectary = np.zeros(self.lbl_blur.shape)
-        for i in clelabeln:
+        for i in labeln:
             nectary = np.logical_or(nectary, np.where(self.lbl_blur == i, 1, 0))
-        #display_image(nectary)
         self.nectary = np.where(center==0, binary_fill_holes(nectary), 0)
-        #display_image(nectary, namesave=f'{curr_flower}_nectaire')
-        del center_blur
+
+        to_display.append([nectary, False, f'{self.flower_ID}_nectary'])
+
         PIL.Image.fromarray(np.array(nectary*255, dtype=np.uint8)).save(\
-                           self.dir_res + "nectaire_mask.tif")
-        del(self.lbl_blur, self.lbl, labeln, labelc_blur, clelabeln, labelc)
-
-    def remove_outliers_contours(image_ini, img_height, nb_label2):
-        """ Supprime les valeurs aberrentes des contours pour qu'elles ne soient
-        pas prises en compte dans l'interpolation"""
-        image_finale = np.zeros(image_ini.shape)
-        lab_a_garder = []
-        if nb_label2 > 2:
-            dico_lab = {}
-            for i2 in range(1, nb_label2+1):
-                dico_lab[i2] = len(np.where(image_ini == i2)[0])
-            value = list(dico_lab.values())
-            value.sort()
-            while len(value) > 2:
-                value.pop(0)
-            for k2, i2 in dico_lab.items():
-                if i2 in value:
-                    lab_a_garder.append(k2)
+                           self.dir_res + "nectary_mask.tif")
+        del(self.lbl_blur, self.lbl, labeln, labelc_blur, labelc)
+        if self.showimg:
+            return(self.nectary, to_display)
         else:
-            lab_a_garder = [1, 2]
-        for lab in lab_a_garder:
-            ind_intervalle = np.where(image_ini == lab)
-            meanInt = np.mean(img_height[ind_intervalle])
-            stdInt = np.std(img_height[ind_intervalle])
-            ind_suppr = np.where(img_height > meanInt+(3*stdInt))
-            temp = np.where(image_ini==lab, img_height, 0)
-            temp[ind_suppr] = 0
-            image_finale = np.maximum(temp, image_finale)
-        return image_finale
-
-    def nectary_contours(self):
-        print("Contours")
-        #
-        # Contours de la nectaire afin de réaliser l'interpolation pour le contour inférieur de celle-ci
-        nectary_cont = np.logical_xor(self.nectary, binary_erosion(self.nectary, structure=STRUCT8))
-        self.ind_nectary = np.where(self.nectary > 0)
-        del self.nectary
-        label_nect_cont, numlab = measure.label(nectary_cont, return_num=True)
-        #display_image(label_nect_cont, namesave=f'{self.curr_flower}_contours_nectaire_lab')
-        #
-        # Nettoyage des contours par élimination des outliers pour éviter les problèmes d'interpolation
-        nectary_cont = self.remove_outliers_contours(label_nect_cont, self.height, numlab)
-        #display_image(nectary_cont, namesave=f'{self.curr_flower}_contours_nectaire')
-        #
-        # Interpolation
-        grid_xn, grid_yn = np.indices((nectary_cont.shape[0], nectary_cont.shape[1]))
-        points2 = np.where(nectary_cont > 10)
-        values2 = nectary_cont[points2]
-        points2 = np.array([[points2[0][f], points2[1][f]] for f in range(len(points2[0]))])
-        self.interp2 = interpolate.griddata(points2, values2, (grid_xn, grid_yn), \
-                                       fill_value=0, method='linear')
-        #display_image(interp2, namesave=f'{self.curr_flower}_interpolation')
-        del(grid_xn, grid_yn, points2, values2)
-        PIL.Image.fromarray(self.interp2).save(self.dir_res + "interpolation.tif")
+            return(self.nectary, [])
 
     def create_3Dimage(self):
-        # Création de l'image 3D finale
+        """ Create and save 3D binary image of the nectary """
+        # initial binary image
         imageini = np.zeros([self.nectary_cont.shape[0], self.nectary_cont.shape[1],\
-                             int(self.lastfile-self.firstfile)], dtype=np.uint8)
+                             int(self.last_file-self.first_file)], dtype=np.uint8)
         ind = np.where(self.interp2 > 0)
-        print(min(self.interp2[ind]))
-        #del(nectaire_cont)
+        if self.verb: print(min(self.interp2[ind]))
         ind = 0
         for i, file in enumerate(self.list_files):
             match = re.search(REGEXP, file)
-            if not int(match.group('num')) in range(self.firstfile, self.lastfile): continue
+            if not int(match.group('num')) in range(self.first_file, self.last_file): continue
             img = np.array(PIL.Image.open(file))
             img = np.where(np.array(img) >= SEUIL, 1, 0)
             indtemp = np.where(self.interp2 >= i)
@@ -422,55 +437,37 @@ class Female_Flower():
             imageini[:, :, ind] = img[:, :]
             ind += 1
         del(self.interp2, img, indtemp)
-        #
-        #Changement du 09/09/20 iterations=10 --> iterations = 20
-        erosion_bin = binary_erosion(imageini, structure=STRUCT26, iterations=20)
+        # erosion to separate the different elements of the binary image
+        erosion_bin = binary_erosion(imageini, structure=STRUCT26, iterations=open3D)
+        # only the larger 3D element inside the projected 2D nectary mask is kept
         label_eros, nb_label = measure.label(erosion_bin, return_num=True)
-        print(f"nb_label : {nb_label}")
-        props = measure.regionprops(label_eros)
-        list_lab = []
-        for i in props:
-            if i["area"] > 500:
-                list_lab.append(i["label"])
-        print(f"len(list_lab) : {list_lab}")
         for i in range(label_eros.shape[2]):
             if i==0:
                 temphist = np.histogram(label_eros[self.ind_nectary[0],self.ind_nectary[1],i], bins=nb_label+1, range=(0, nb_label+1))
             else:
                 temphist[0][:] += np.histogram(label_eros[self.ind_nectary[0],self.ind_nectary[1],i], bins=nb_label+1, range=(0, nb_label+1))[0][:]
-        a_garder = int(temphist[1][np.where(temphist[0][1:]==temphist[0][1:].max())])+1
-        print(temphist)
-        print(f"a garder v3 : {a_garder}")
-
+        to_keep = int(temphist[1][np.where(temphist[0][1:]==temphist[0][1:].max())])+1
         for i in range(label_eros.shape[2]):
             temp = label_eros[:, :, i]
-            temp2 = np.where(temp == a_garder, True, False)
+            temp2 = np.where(temp == to_keep, True, False)
             erosion_bin[:, :, i] = temp2
-        print(f"erosion_bin fait")
-
-        label_dil = binary_dilation(erosion_bin, structure=STRUCT26, iterations=20)
-        print("label_dil fait")
-
-        #
-        del list_lab
-        #
+        del(label_eros)
+        # dilation to recover the initial boundary
+        label_dil = binary_dilation(erosion_bin, structure=STRUCT26, iterations=open3D+5)
         ind = 0
+        deb = 0
         for i, file in enumerate(self.list_files):
             match = re.search(REGEXP, file)
-            if not int(match.group('num')) in range(self.firstfile, self.lastfile): continue
+            if not int(match.group('num')) in range(self.first_file, self.last_file): continue
+            if not deb: deb = i
             text = f"nectary_{match.group('num')}.tif"
             ttemp = np.array(np.logical_and(label_dil[:, :, ind],\
                                             imageini[:, :, ind]), dtype=np.uint8)*255
+            label_dil[:,:,ind] = ttemp
             PIL.Image.fromarray(ttemp).save(self.dir_res + text)
             ind += 1
-        #
-        #
-        del(imageini, file, match, label_dil, text, ttemp)
-
-    def process(self):
-        self.nectary_detection()
-        self.nectary_contours()
-        self.create_3Dimage()
+        del(erosion_bin)
+        
 
 
 
@@ -484,134 +481,75 @@ class Male_Flower():
         self.showimg    = showimg
         self.verb       = verbose
         self.name 		= ""
+        self.max_lab    = 1 # only one contour on the 2D z-projection
         
     def morphological_segmentation(self, img_height, mask_height, min_dist=120):
         """ Segmentation using watershed """
-        seuilOtsu = threshold_otsu(img_height)
-        imgOtsu = np.where(img_height>seuilOtsu,255,0)
         local_maxi = peak_local_max(img_height, min_distance=min_dist, indices=False)
-        imgOtsu = np.where(imgOtsu==0,local_maxi,255)
-        dist = distance_transform_edt(imgOtsu)
-        local_maxi = peak_local_max(dist, min_distance=min_dist, indices=False)
-        markers = measure.label(local_maxi)
-        local_maxi = watershed(-dist,markers, mask=imgOtsu)
         markers = measure.label(local_maxi)
         ws = watershed(-img_height, markers, mask=mask_height)
         return ws
 
     def label_segmentation(self, img_height, img_height_blur, mask):
         self.mask = mask
-        self.lbl = self.morphological_segmentation(img_height_blur, mask, 80)
+        self.height_blur = img_height_blur
+        self.lbl = self.morphological_segmentation(uniform_filter(img_height_blur,size=50), mask, 80)
 
     def nectary_detection(self):
-        labelc = []
-        cont = input("Continue ? (Yes/No/Choose the labels[c]) ")
-        if cont in ["Yes","Y", "yes", "y"]:
-            del mask
-        elif cont in ["Choose", "c", "C", "choose"]:
-            labelc = input("Write the labels to keep separated by ',': ")
-            labelc = [int(l) for l in labelc.split(',')]
-        elif cont in ["No", "no", "N", "n"]:
-            labels_ws = self.morphological_segmentation(self.lbl, self.mask, 120)
-            #affiche_image(labels_ws, label=True, namesave=f'{curr_fleur}_segmentation_120')
-            cont = input("Continuer ? (Oui/Choisir les labels[c]) ")
-            if cont in ["Oui","O", "oui", "o"]:
-                del self.mask
-            elif cont in ["Choisir", "c", "C", "choisir"]:
-                labelc = input("Inscrire les labels à conserver séparés par des ',' : ")
-                labelc = [int(l) for l in labelc.split(',')]
-        if not len(labelc):
-            labelc = [labels_ws[int(labels_ws.shape[0]/2), int(labels_ws.shape[1]/2)],]
-        nectary = np.zeros(labels_ws.shape)
-        for l in labelc:
-            nectary = np.logical_or(nectary, np.where(labels_ws == l, 1, 0))
-        #affiche_image(nectary)
-        self.nectary = binary_fill_holes(nectary)
-        #PIL.Image.fromarray(np.array(nectary*255, dtype=np.uint8)).save(\
-        #                   dossier_res + f"nectaire_mask_{SEUIL}_blur{blur}.tif")
-        #affiche_image(nectary, namesave=f'{curr_fleur}_nectaire')
-        
-    def remove_outliers_contours(image_ini, img_height, nb_label2):
-        """ Supprime les valeurs aberrentes des contours pour qu'elles ne soient
-        pas prises en compte dans l'interpolation"""
-        image_finale = np.zeros(image_ini.shape)
-        lab_a_garder = []
-        if nb_label2 > 1:
-            dico_lab = {}
-            for i2 in range(1, nb_label2+1):
-                dico_lab[i2] = len(np.where(image_ini == i2)[0])
-            value = list(dico_lab.values())
-            value.sort()
-            while len(value) > 2:
-                value.pop(0)
-            for k2, i2 in dico_lab.items():
-                if i2 in value:
-                    lab_a_garder.append(k2)
-        else:
-            lab_a_garder = [1, ]
-        for lab in lab_a_garder:
-            ind_intervalle = np.where(image_ini == lab)
-            meanInt = np.median(img_height[ind_intervalle])
-            stdInt = np.std(img_height[ind_intervalle])
-            ind_suppr = np.where(img_height-meanInt >= (2*stdInt))
-            temp = np.where(image_ini==lab, img_height, 0)
-            temp[ind_suppr] = 0
-            image_finale = np.maximum(temp, image_finale)
-        return image_finale
+        """ For male flowers, nectary is on the center of the flower.
+        => First step = find the flower boundaries
+        => Second step = reconstruct regions of the boundaries
+        => Thrid step =  keep the central regions of the flower """
 
-    def nectary_contours(self):
-        print("Contours")
-        #
-        # Contours de la nectary afin de réaliser l'interpolation pour le contour inférieur de celle-ci
-        nectary_cont = np.logical_xor(self.nectary, binary_erosion(self.nectary, structure=STRUCT8))
-        self.ind_nectary = np.where(self.nectary > 0)
-        del self.nectary
-        label_nect_cont, numlab = measure.label(nectary_cont, return_num=True)
-        #display_image(label_nect_cont, namesave=f'{self.curr_flower}_contours_nectaire_lab')
-        #
-        # Nettoyage des contours par élimination des outliers pour éviter les problèmes d'interpolation
-        nectary_cont = self.remove_outliers_contours(label_nect_cont, self.height, numlab)
-        #PIL.Image.fromarray(nectaire_cont).save(\
-        #                   dossier_res + f"nectaire_cont_{SEUIL}_blur{blur}.tif")
-        #display_image(nectary_cont, namesave=f'{self.curr_flower}_contours_nectaire')
-        #
-        # Interpolation
-        grid_xn, grid_yn = np.indices((nectary_cont.shape[0], nectary_cont.shape[1]))
-        points2 = np.where(nectary_cont > 10)
-        values2 = nectary_cont[points2]
-        points2 = np.array([[points2[0][f], points2[1][f]] for f in range(len(points2[0]))])
-        self.interp2 = interpolate.griddata(points2, values2, (grid_xn, grid_yn), \
-                                       fill_value=0, method='linear')
-        #display_image(interp2, namesave=f'{self.curr_flower}_interpolation')
-        del(grid_xn, grid_yn, points2, values2)
-        PIL.Image.fromarray(self.interp2).save(self.dir_res + "interpolation.tif")
+        labelc = []
+        to_display = []
+        cont_flower = np.logical_xor(binary_erosion(self.mask, structure=STRUCT8, iterations=20),self.mask)
+        pp.imshow(self.lbl*cont_flower)
+        cont_hist = np.histogram(np.where(self.lbl*cont_flower>0, self.lbl, 0),\
+                                 bins=np.max(self.lbl), range=[1,np.max(self.lbl)+1])
+        labelc = cont_hist[1][np.where(cont_hist[0]==0)]
+        nectary = np.zeros(self.mask.shape)
+        for l in labelc:
+            nectary = np.logical_or(nectary, np.where(self.lbl == l, 1, 0))
+        
+        self.nectary = binary_fill_holes(nectary)
+        to_display.append([self.nectary, False,False])
+
+        if self.showimg:
+            return(self.nectary, to_display)
+        else:
+            return(self.nectary, [])
+        
         
     def create_3Dimage(self):
-        # Création de l'image 3D finale
+        """ Create and save 3D binary image of the nectary """
+        #~~ Initial binary image ~~
         imageini = np.zeros([self.nectary_cont.shape[0], self.nectary_cont.shape[1],\
-                             int(self.lastfile-self.firstfile)], dtype=np.uint8)
+                             int(self.last_file-self.first_file)], dtype=np.uint8)
+        cont_ini = np.zeros([self.nectary_cont.shape[0], self.nectary_cont.shape[1],\
+                             int(self.last_file-self.first_file)], dtype=np.uint8)
         ind = np.where(self.interp2 > 0)
-        print(min(self.interp2[ind]))
+        if self.verb: print(min(self.interp2[ind]))
         ind = 0
         for i, file in enumerate(self.list_files):
             match = re.search(REGEXP, file)
-            if not int(match.group('num')) in range(self.firstfile, self.lastfile): continue
+            if not int(match.group('num')) in range(self.first_file, self.last_file): continue
             img = np.array(PIL.Image.open(file))
             img = np.where(np.array(img) >= SEUIL, 1, 0)
+            cont_ini[:, :, ind] = img[:, :]
             indtemp = np.where(self.interp2 >= i)
             img[indtemp] = 0
             imageini[:, :, ind] = img[:, :]
             ind += 1
         del(self.interp2, img, indtemp)
-        #affiche_image(imageini[700,:,:])
-        #
+        
+        cont_ini = np.logical_xor(cont_ini, binary_erosion(cont_ini, structure=STRUCT26, iterations=1))
         if fillholes:
             imageini = binary_fill_holes(imageini, structure=STRUCT26)
         erosion_bin = binary_erosion(imageini, structure=STRUCT26, iterations=open3D)
         #affiche_image(erosion_bin[700,:,:])
         label_eros, nb_label = measure.label(erosion_bin, return_num=True)
         #affiche_image(label_eros[700,:,:])
-        print(f"nb_label : {nb_label}")
         histoini = np.histogram(label_eros, bins=nb_label+1, range=(0, nb_label+1))
         for i in range(label_eros.shape[2]):
             if i==0:
@@ -620,17 +558,12 @@ class Male_Flower():
                 temphist[0][:] += np.histogram(label_eros[self.ind_nectary[0],self.ind_nectary[1],i], bins=nb_label+1, range=(0, nb_label+1))[0][:]
         histopc = [nect/tot for nect, tot in zip(temphist[0][1:], histoini[0][1:])]
         print(histopc)
-        # Modification du 18_01_21 pour diminution progressive du % de présence du label dans l'objet
         pc = 0.75
         a_garder = [int(temphist[1][i+1]) for i in range(len(histopc)) if histopc[i] > pc]
         print(temphist)
         while not(len(a_garder)):
             pc -= 0.05
-            print(f"pc : {pc}")
             a_garder = [int(temphist[1][i+1]) for i in range(len(histopc)) if histopc[i] > pc]
-        print(f"a garder v3 : {a_garder}")
-
-
 
         for i in range(label_eros.shape[2]):
             temp = label_eros[:, :, i]
@@ -638,19 +571,18 @@ class Male_Flower():
             for g in a_garder:
                 temp2 = np.where(temp==g, True, temp2)
             erosion_bin[:, :, i] = temp2
-        print(f"erosion_bin fait")
+        print(f"\nerosion_bin fait")
+        del(label_eros)
 
-        label_dil = binary_dilation(erosion_bin, structure=STRUCT26, iterations=open3D+5, mask = imageini)
-        #affiche_image(label_dil[700,:,:])
-        print("label_dil fait")
+        label_dil = binary_dilation(erosion_bin, structure=STRUCT26, iterations=open3D+10, mask = imageini)
+        print("\nlabel_dil fait")
         
-        #
-        #del list_lab
-        #
         ind = 0
+        deb = 0
         for i, file in enumerate(self.list_files):
             match = re.search(REGEXP, file)
-            if not int(match.group('num')) in range(self.firstfile, self.lastfile): continue
+            if not int(match.group('num')) in range(self.first_file, self.last_file): continue
+            if not deb: deb = i
             if fillholes:
                 text = f"nectary_fillholes_{match.group('num')}.tif"
             else:
@@ -659,45 +591,35 @@ class Male_Flower():
                                             imageini[:, :, ind]), dtype=np.uint8)*255
             PIL.Image.fromarray(ttemp).save(self.dir_res + text)
             ind += 1
-        #
-        #
-        #del(imageini, file, match, label_dil, text, ttemp)
-        #del(interp2, img, indtemp)
-        #del(fich, match, text, ttemp)
-
-    def process(self):
-        self.nectary_detection()
-        self.nectary_contours()
-        self.create_3Dimage()
+        del(erosion_bin)
 
 
 
 def main(argv):
     """Main function"""
-    # Initialisation des variables
-    global SEUIL
-
-    if "show" in argv.keys():
-        showimg = True
-    else:
-        showimg = False
-    if "path" in argv.keys():
-        d = argv["path"]
+    global SEUIL, TYPE, DICOTYPE
+    
+    SEUIL = int(argv["--seuil"])
+    showimg = argv["--show"]
+    verb = argv["--verbose"]
+    
+    if argv["--path"]:
+        d = argv["--path"]
     else:
         curr_path = os.getcwd()
         d = askdirectory(initialdir=curr_path, title='Select the images path')
-    if "seuil" in argv.keys():
-        SEUIL = argv["seuil"]
-
-    if "verbose" in argv.keys():
-        verb = True
-    else:
-        verb = False
+        
+    if argv["--type"]:
+        temp = eval(argv['--type'])
+        TYPE = [i for i in temp.keys()]
+        DICOTYPE = temp.copy()
+        del(temp)
     
     all_flowers = All_Flowers(d, showimg, verb)
     if showimg:
         all_flowers.dirpp = askdirectory(initialdir=d,
                                          title='Select a path to save intermediate images')
+        all_flowers.dirpp += os.sep
         if not os.path.exists(all_flowers.dirpp):
             os.makedirs(all_flowers.dirpp)
     all_flowers.run_processing()
@@ -705,7 +627,6 @@ def main(argv):
 
     
 if __name__ == "__main__":
-    # récupèration des options ajoutées en ligne de commande
+    # options added in command line
     arguments = docopt(__doc__)
-    # appel de la fonction main
     main(arguments)    
